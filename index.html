@@ -94,17 +94,11 @@ label.field-label{display:block;font-size:12px;font-weight:700;color:#93c5fd;mar
   .no-print{display:none!important}
   body{background:#fff!important;color:#111!important}
   @page{size:A4 portrait;margin:8mm 10mm 8mm 10mm}
-}
-  body{background:#fff!important;color:#111!important;margin:0!important;padding:0!important}
-  @page{size:A4 portrait;margin:0}
-  #pcontent{
-    width:210mm!important;
-    max-height:297mm!important;
-    overflow:hidden!important;
-    margin:0 auto!important;
-    padding:8mm 12mm!important;
-    transform-origin:top left!important;
-  }
+  #pcontent{transform:none!important;width:100%!important;padding:0!important;max-width:100%!important}
+  .print-section-block{page-break-inside:avoid}
+  table{page-break-inside:auto}
+  tr{page-break-inside:avoid;page-break-after:auto}
+  thead{display:table-header-group}
 }
   body{background:#fff!important}
   @page{size:A4;margin:10mm 12mm}
@@ -191,31 +185,45 @@ function alliedPresetRate(preset,dateStr){
 // calcShiftAllied: splits a shift across midnight, applying the correct
 // day-type rate for each calendar day (same logic as calcShift but uses
 // Allied flat-per-day-type rates instead of Citiguard day/night rates)
+
+function hToTime(h){
+  // Normalise to 0-24
+  h=((h%24)+24)%24;
+  var hh=Math.floor(h);
+  var mm=Math.round((h-hh)*60);
+  if(mm===60){hh++;mm=0;}
+  return String(hh).padStart(2,'0')+':'+String(mm).padStart(2,'0');
+}
+
 function calcShiftAllied(startTime,endTime,dateStr,preset){
   var start=timeToH(startTime),end=timeToH(endTime);
   var overnight=(end<=start);
   var segs=[];
-  function addSeg(hours,ds){
+  var cursor=start;
+  function addSeg(from,to,ds){
+    var hours=to-from;
     if(hours<=0)return;
     var rate=alliedPresetRate(preset,ds);
-    // merge with last seg if same rate
+    // merge if same rate AND same day boundary (cursor matches)
     if(segs.length&&segs[segs.length-1].rate===rate){
       segs[segs.length-1].hours+=hours;
+      segs[segs.length-1].segEnd=hToTime(to===24?0:to);
     } else {
-      segs.push({hours:hours,rate:rate});
+      segs.push({hours:hours,rate:rate,
+        segStart:hToTime(from),segEnd:hToTime(to===24?0:to)});
     }
   }
   if(!overnight){
-    addSeg(end-start,dateStr);
+    addSeg(start,end,dateStr);
   } else {
-    addSeg(24-start,dateStr);
+    addSeg(start,24,dateStr);        // first day: start → midnight
     var d2=nextDay(dateStr);
-    addSeg(end,d2);
+    addSeg(0,end,d2);                // second day: midnight → end
   }
   return segs;
 }
 
-const NSW_PH=["2025-01-01","2025-01-27","2025-04-18","2025-04-19","2025-04-20","2025-04-21","2025-04-25","2025-06-09","2025-08-04","2025-10-06","2025-12-25","2025-12-26","2026-01-01","2026-01-26","2026-04-03","2026-04-04","2026-04-05","2026-04-06","2026-04-25","2026-06-08","2026-08-03","2026-10-05","2026-12-25","2026-12-26"];
+const NSW_PH=["2025-01-01","2025-01-27","2025-04-18","2025-04-19","2025-04-20","2025-04-21","2025-04-25","2025-06-09","2025-08-04","2025-10-06","2025-12-25","2025-12-26","2026-01-01","2026-01-26","2026-04-03","2026-04-04","2026-04-05","2026-04-06","2026-04-25","2026-04-27","2026-06-08","2026-08-03","2026-10-05","2026-12-25","2026-12-26"];
 
 let siteMap=JSON.parse(localStorage.getItem('alliedSiteMap')||'null')||{
   "TAFE NSW Kurri Kurri":"Hunter","TAFE NSW Newcastle":"Hunter","TAFE NSW Muswellbrook":"Hunter",
@@ -285,23 +293,30 @@ function calcShift(startTime,endTime,dateStr,rates){
 function calcShiftFlat(startTime,endTime,dateStr,rate){
   var start=timeToH(startTime),end=timeToH(endTime);
   var overnight=(end<=start);
-  var totalHours=overnight?(24-start+end):(end-start);
-  return [{hours:totalHours,rate:rate}];
+  if(!overnight){
+    return [{hours:end-start,rate:rate,segStart:startTime,segEnd:endTime}];
+  } else {
+    var segs=[];
+    if(24-start>0)segs.push({hours:24-start,rate:rate,segStart:startTime,segEnd:'00:00'});
+    if(end>0)segs.push({hours:end,rate:rate,segStart:'00:00',segEnd:endTime});
+    return segs;
+  }
 }
 
 // STATE - each schedule row is a single date/shift
 let state={
   company_selected:'Citiguard',
-  quoteNumber:'Q486',
+  quoteNumber:'QU-001',
   company:'',
   fullName:'',phone:'',email:'',clientAddress:'',
   siteName:'',siteAddress:'',region:'Hunter',details:'',reference:'',
   sections:[
-    {id:1,label:'Security Services',category:'Ad-Hoc Static Metro',
-     rows:[{id:1,date:'',startTime:'',endTime:'',hours:1,rate:0,quantity:1,desc:''}]}
+    {id:1,label:'Security Services',category:'Ad-Hoc Static Metro',rows:[
+      {id:10,date:'',startTime:'',endTime:'',hours:0,rate:0,quantity:1,desc:''}
+    ]}
   ],
   nextSectionId:2,
-  nextRowId:2,
+  nextRowId:11,
   scheduleRows:[{id:101,date:'',startTime:'19:00',endTime:'07:00',quantity:1}],
   nextSchedId:102,
   showPreview:false,
@@ -426,7 +441,7 @@ function render(){
       // Section header
       schedHTML+='<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px">';
       schedHTML+='<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">';
-      schedHTML+='<input class="input" style="font-size:13px;font-weight:700;color:#60a5fa;letter-spacing:0.5px;padding:6px 10px;width:200px" value="'+esc(sec.label)+'" oninput="upSectionLabel('+sec.id+',this.value)" placeholder="Section name">';
+      schedHTML+='<input class="input" style="font-size:13px;font-weight:700;color:#60a5fa;letter-spacing:0.5px;padding:6px 10px;width:200px" value="'+esc(sec.label)+'" onchange="upSectionLabel('+sec.id+',this.value)" onblur="upSectionLabel('+sec.id+',this.value)" placeholder="Section name" onclick="event.stopPropagation()">';
       if(!isAdditional){
         // Rate category dropdown for time-based sections
         var catOpts=['Ad-Hoc Static Metro','Ad-Hoc Crowd Control Metro','custom'].map(function(c){
@@ -545,8 +560,8 @@ function render(){
                 '<td class="mono" rowspan="'+segs.length+'">'+formatDate(row.date)+'</td>'+
                 '<td rowspan="'+segs.length+'">'+row.dayName+(row.isPH?'<span class="ph-badge">PH</span>':'')+'</td>':'')+
               (!hideTimes?
-                '<td class="mono">'+(si===0&&segs.length===1?row.startTime||'-':si===0?row.startTime||'-':'-')+'</td>'+
-                '<td class="mono">'+(si===segs.length-1&&segs.length===1?row.endTime||'-':si===segs.length-1?row.endTime||'-':'-')+'</td>'+
+                '<td class="mono">'+(seg.segStart||row.startTime||'-')+'</td>'+
+                '<td class="mono">'+(seg.segEnd||row.endTime||'-')+'</td>'+
                 '<td class="mono-right">'+seg.hours.toFixed(2)+'</td>':'')+ 
               '<td class="mono-right">'+fmtCur(seg.rate)+'</td>'+
               (si===0?'<td class="mono-right" rowspan="'+segs.length+'">'+row.quantity+'</td>':'')+
@@ -704,7 +719,7 @@ function renderPreview(){
       if(!sec.rows||sec.rows.length===0)return;
       var isAdditional=(sec.category==='additional');
       var hideTimes=state.mobilePatrol&&!isAdditional;
-      printTableHTML+='<div style="margin-bottom:10px">';
+      printTableHTML+='<div class="print-section-block" style="margin-bottom:10px">';
       printTableHTML+='<div style="background:#0f172a;color:#fff;padding:7px 12px;font-size:11px;font-weight:700;letter-spacing:0.8px;border-radius:4px 4px 0 0">'+esc(sec.label)+'</div>';
       printTableHTML+='<table style="width:100%;border-collapse:collapse"><thead><tr style="background:#1e293b;color:#e2e8f0">';
       if(isAdditional){
@@ -744,8 +759,8 @@ function renderPreview(){
                 '<td rowspan="'+segs.length+'" style="padding:5px 8px;font-size:12px">'+row.dayName+(row.isPH?' <span style="color:#dc2626;font-size:10px;font-weight:700">PH</span>':'')+'</td>';
             }
             if(!hideTimes){
-              printTableHTML+='<td style="padding:5px 8px;text-align:center;font-size:12px">'+(si===0?row.startTime||'-':'-')+'</td>'+
-                '<td style="padding:5px 8px;text-align:center;font-size:12px">'+(si===segs.length-1?row.endTime||'-':'-')+'</td>'+
+              printTableHTML+='<td style="padding:5px 8px;text-align:center;font-size:12px">'+(seg.segStart||row.startTime||'-')+'</td>'+
+                '<td style="padding:5px 8px;text-align:center;font-size:12px">'+(seg.segEnd||row.endTime||'-')+'</td>'+
                 '<td style="padding:5px 8px;text-align:right;font-family:monospace;font-size:12px">'+seg.hours.toFixed(2)+'</td>';
             }
             printTableHTML+='<td style="padding:5px 8px;text-align:right;font-family:monospace;font-size:12px">'+fmtCur(seg.rate)+'</td>';
@@ -764,8 +779,8 @@ function renderPreview(){
     });
   }
 
-  var rr=[{l:'MON TO FRI 6am to 6pm:',v:rates.day},{l:'MON TO FRI 6pm to 6am:',v:rates.night},{l:'SATURDAY:',v:rates.sat},{l:'SUNDAY:',v:rates.sun},{l:'PUBLIC HOLIDAY:',v:rates.ph}]
-    .map(function(r){return '<div style="display:flex;justify-content:space-between;font-size:12px;padding:1px 0;color:#334155"><span>'+r.l+'</span><span style="font-weight:600">$'+r.v.toFixed(2)+'</span></div>'}).join('');
+  var rr=rates?[{l:'MON TO FRI 6am to 6pm:',v:rates.day},{l:'MON TO FRI 6pm to 6am:',v:rates.night},{l:'SATURDAY:',v:rates.sat},{l:'SUNDAY:',v:rates.sun},{l:'PUBLIC HOLIDAY:',v:rates.ph}]
+    .map(function(r){return '<div style="display:flex;justify-content:space-between;font-size:12px;padding:1px 0;color:#334155"><span>'+r.l+'</span><span style="font-weight:600">$'+r.v.toFixed(2)+'</span></div>'}).join(''):'';
 
   var pThRow=''; // not used for Allied now - each section has its own header
 
@@ -780,7 +795,7 @@ function renderPreview(){
 '<span style="color:#475569;font-size:11px;margin-left:16px">Tip: Disable "Headers and footers" in print settings to remove the file path.</span>'+
     '</div>'+
 
-    '<div id="pcontent" style="max-width:900px;margin:0 auto;padding:28px 40px;font-family:var(--font-body);color:#111;transform:scale('+state.printScale/100+');transform-origin:top center">'+
+    '<div id="pcontent" style="max-width:900px;margin:0 auto;padding:20px 32px;font-family:var(--font-body);color:#111;transform:scale('+state.printScale/100+');transform-origin:top center">'+
 
     '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">'+
     '<div>'+
@@ -822,10 +837,10 @@ function renderPreview(){
 
     printTableHTML+
 
-    '<div style="display:flex;justify-content:flex-end;margin-bottom:10px"><div style="width:240px">'+
+    '<div style="display:flex;justify-content:flex-end;margin-bottom:10px"><div style="width:320px">'+
     '<div style="display:flex;justify-content:space-between;padding:4px 0;font-size:13px;font-family:var(--font-mono);color:#334155"><span>Subtotal:</span><span>'+ft(sub)+'</span></div>'+
-    '<div style="display:flex;justify-content:space-between;padding:4px 0;font-size:13px;font-family:var(--font-mono);color:#334155"><span>GST:</span><span>'+ft(gst)+'</span></div>'+
-    '<div style="display:flex;justify-content:space-between;padding:6px 0;font-size:16px;font-weight:800;font-family:var(--font-mono);color:#0f172a;border-top:2px solid #0f172a;margin-top:2px"><span>Total:</span><span>'+ft(total)+'</span></div>'+
+    '<div style="display:flex;justify-content:space-between;padding:4px 0;font-size:13px;font-family:var(--font-mono);color:#334155"><span>GST (10%):</span><span>'+ft(gst)+'</span></div>'+
+    '<div style="display:flex;justify-content:space-between;padding:6px 0;font-size:16px;font-weight:800;font-family:var(--font-mono);color:#0f172a;border-top:2px solid #0f172a;margin-top:2px"><span style="white-space:nowrap">Total (inc. GST):</span><span style="white-space:nowrap;margin-left:16px">'+ft(total)+'</span></div>'+
     '</div></div>'+
 
     '<div style="font-size:10px;color:#64748b;font-style:italic;line-height:1.5">'+
